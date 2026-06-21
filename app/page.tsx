@@ -45,11 +45,26 @@ export default function AdminDashboard() {
     { id: 3, kind: '不正検知', subject: '寄付 DON-2026-000042', note: '短時間に同一カードで多重寄付', severity: '中' },
   ])
   const [csvMsg, setCsvMsg] = useState('')
+  const [aiOpen, setAiOpen] = useState(false)
 
   const POLICY_THEMES = ['防災・災害死ゼロ', '高齢者熱中症対策', '交通事故削減', '子育て・教育', '入札透明化', 'AI行政改革', '人権外交', 'エネルギー・蓄電池', '地方財政改革', '観光・温泉振興']
 
   const tick = () => setProcessed((n) => n + 1)
   const expenseTotal = expenses.reduce((s, e) => s + e.amount, 0)
+
+  // AIアシスト: 現在の状態から優先対応・リスクを助言（プロトはルールベース。本番はLLM/異常検知）
+  const aiAdvice = (() => {
+    const tips: { icon: string; text: string; tone: 'risk' | 'info' }[] = []
+    const highFlags = flags.filter((f) => f.severity === '高')
+    if (highFlags.length) tips.push({ icon: '⚠️', text: `重要度「高」のコンプラ項目が${highFlags.length}件。${highFlags[0].subject} を最優先で確認してください。`, tone: 'risk' })
+    const noReceipt = expenses.filter((e) => !e.receipt)
+    if (noReceipt.length) tips.push({ icon: '🧾', text: `証憑なしの支出が${noReceipt.length}件。承認不可のため差戻しを推奨します。`, tone: 'risk' })
+    const related = expenses.filter((e) => e.related)
+    if (related.length) tips.push({ icon: '🔗', text: `関連当事者取引の支出が${related.length}件。コンプラ確認後に承認してください。`, tone: 'risk' })
+    if (candidates.length + campaigns.length) tips.push({ icon: '📋', text: `審査待ちが${candidates.length + campaigns.length}件。候補者審査→クラファン審査の順での処理が効率的です。`, tone: 'info' })
+    if (!tips.length) tips.push({ icon: '✅', text: '緊急の対応事項はありません。', tone: 'info' })
+    return tips
+  })()
 
   const TABS: { key: Tab; label: string; count: number }[] = [
     { key: 'review', label: '審査キュー', count: candidates.length + campaigns.length },
@@ -74,6 +89,31 @@ export default function AdminDashboard() {
         <div className={card}><p className='text-xs text-gray-500'>承認待ち支出</p><p className='mt-1 text-lg font-bold text-amber-600'>{yen(expenseTotal)}</p></div>
         <div className={card}><p className='text-xs text-gray-500'>コンプラ要確認</p><p className='mt-1 text-lg font-bold text-rose-600'>{flags.length}件</p></div>
         <div className={card}><p className='text-xs text-gray-500'>処理済み（本日）</p><p className='mt-1 text-lg font-bold text-emerald-600'>{processed}件</p></div>
+      </div>
+
+      {/* AIアシスト */}
+      <div className='mt-4 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4'>
+        <div className='flex items-center justify-between'>
+          <div className='flex items-center gap-2'>
+            <span className='text-lg'>🤖</span>
+            <span className='text-sm font-bold text-indigo-900'>AIアシスト</span>
+            <span className='rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700'>運営サポート</span>
+          </div>
+          <button onClick={() => setAiOpen((v) => !v)} className='text-xs font-medium text-indigo-600 hover:text-indigo-800'>
+            {aiOpen ? '閉じる' : '今日の優先対応を見る'}
+          </button>
+        </div>
+        {aiOpen && (
+          <div className='mt-3 space-y-2'>
+            {aiAdvice.map((a, i) => (
+              <div key={i} className={`flex items-start gap-2 rounded-lg p-2.5 text-sm ${a.tone === 'risk' ? 'bg-rose-50 text-rose-800' : 'bg-white text-gray-700'}`}>
+                <span className='shrink-0'>{a.icon}</span>
+                <span>{a.text}</span>
+              </div>
+            ))}
+            <p className='text-[11px] text-indigo-400'>※ プロトはルールベースの助言。本番はLLM＋異常検知で要約・対応提案・下書き生成を行う。</p>
+          </div>
+        )}
       </div>
 
       {/* タブ */}
