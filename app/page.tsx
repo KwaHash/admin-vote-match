@@ -40,6 +40,9 @@ interface QueueItem {
   status: Status
 }
 interface RosterItem { id: number; name: string; region: string; candidates: number; status: 'imported' | 'reviewed' | 'generated' | 'published' }
+// 国・地域の課題／政策提言（国民側 kpi ページに公開）。地域は都道府県単位
+interface IssueItem { id: number; scope: string; category: string; title: string; proposal: string; stage: number; goal: number; youtube: string; published: boolean }
+const ISSUE_FUNNEL = ['政策案作成', '関係者へ周知', '議員への提案', '検討中', 'その他'] as const
 interface AuditEntry { id: number; time: string; actor: string; action: string; target: string }
 interface Rule { id: string; name: string; desc: string; severity: '高' | '中'; enabled: boolean }
 
@@ -96,6 +99,15 @@ export default function AdminOS() {
     { id: 3, name: '横浜市議会議員選挙', region: '神奈川県横浜市', candidates: 12, status: 'published' },
   ])
   const [importSeq, setImportSeq] = useState(0)
+
+  const [issues, setIssues] = useState<IssueItem[]>([
+    { id: 1, scope: '国', category: '少子化・子育て', title: '出生数の減少と子育て負担の重さ', proposal: '子育て世帯への継続支援パッケージ', stage: 2, goal: 3000000, youtube: 'SAMPLE_KOSODATE', published: true },
+    { id: 2, scope: '国', category: 'エネルギー', title: '電気代の高さとエネルギー安全保障', proposal: '電気代の負担軽減と分散型電源の推進', stage: 3, goal: 3000000, youtube: 'SAMPLE_ENERGY', published: true },
+    { id: 3, scope: '東京都', category: '子育て', title: '保育・学童の不足', proposal: '保育・学童の整備と人材確保', stage: 2, goal: 2000000, youtube: '', published: true },
+    { id: 4, scope: '大阪府', category: '都市・経済', title: '万博後の跡地・施設の活用', proposal: '跡地の長期活用とにぎわい維持', stage: 0, goal: 1500000, youtube: '', published: false },
+  ])
+  const [issueSeq, setIssueSeq] = useState(0)
+  const [form, setForm] = useState({ scope: '国', category: '', title: '', proposal: '', goal: '1000000', youtube: '' })
 
   const enabled = useMemo(() => Object.fromEntries(rules.map((r) => [r.id, r.enabled])), [rules])
 
@@ -175,6 +187,11 @@ export default function AdminOS() {
 
   const toggleRule = (id: string) => setRules((p) => p.map((r) => { if (r.id === id) { const nx = !r.enabled; setRuleHistory((h) => [{ id: h.length + 1, time: now(), text: `ルール「${r.name}」を${nx ? '有効化' : '無効化'}` }, ...h]); return { ...r, enabled: nx } } return r }))
 
+  // ── 国・地域の課題／政策提言 管理 ──
+  const advanceIssue = (id: number) => { const it = issues.find((x) => x.id === id); if (it && it.stage < ISSUE_FUNNEL.length - 1) { setIssues((p) => p.map((x) => (x.id === id ? { ...x, stage: x.stage + 1 } : x))); log(`政策提言の段階を「${ISSUE_FUNNEL[it.stage + 1]}」へ更新`, `課題：${it.title}`) } }
+  const togglePublish = (id: number) => { const it = issues.find((x) => x.id === id); if (it) { setIssues((p) => p.map((x) => (x.id === id ? { ...x, published: !x.published } : x))); log(it.published ? '課題を非公開に' : '課題を公開（国民側に表示）', `課題：${it.title}`) } }
+  const addIssue = () => { if (!form.title.trim() || !form.proposal.trim()) return; const n = issueSeq + 1; setIssueSeq(n); setIssues((p) => [{ id: 1000 + n, scope: form.scope, category: form.category.trim() || '未分類', title: form.title.trim(), proposal: form.proposal.trim(), stage: 0, goal: Math.max(0, parseInt(form.goal, 10) || 0), youtube: form.youtube.trim(), published: false }, ...p]); log('課題・政策提言を新規登録（下書き・非公開）', `課題：${form.title.trim()}`); setForm({ scope: '国', category: '', title: '', proposal: '', goal: '1000000', youtube: '' }) }
+
   // ── KPI ──
   const total = items.length
   const handled = items.filter((i) => ['承認済み', '却下済み', '法務確認', '返還候補', '差戻し', '保留'].includes(i.status)).length
@@ -199,6 +216,7 @@ export default function AdminOS() {
     { key: 'expenses', label: '支出・証憑管理' },
     { key: 'compliance', label: 'コンプライアンスセンター' },
     { key: 'elections', label: '選挙ページ生成管理' },
+    { key: 'issues', label: '国・地域の課題管理' },
     { key: 'resources', label: '支援リソース管理' },
     { key: 'reports', label: '透明化レポート管理' },
     { key: 'audit', label: '監査ログ' },
@@ -353,6 +371,56 @@ export default function AdminOS() {
                 {f.next ? <button className={actPrimary} onClick={() => advanceRoster(r.id)}>{f.nextLabel}</button> : <span className='text-xs font-medium text-emerald-600'>公開中（国民側に表示）</span>}
               </div>) })}
             <p className='text-[11px] text-gray-400'>※「AI比較文を事前生成」は観点別の比較文を取込時に一度だけ生成して保存（本番 comparison_perspectives）。公開後は国民側「選挙で選ぶ」に反映。</p>
+          </>
+        )}
+
+        {/* 国・地域の課題／政策提言 管理 */}
+        {tab === 'issues' && (
+          <>
+            {/* 新規登録フォーム */}
+            <div className={card}>
+              <h3 className='mb-2 text-sm font-bold text-gray-900'>国・地域の課題／政策提言を登録</h3>
+              <div className='grid gap-2 sm:grid-cols-2'>
+                <select value={form.scope} onChange={(e) => setForm((f) => ({ ...f, scope: e.target.value }))} className='rounded-lg border border-gray-300 px-3 py-2 text-sm'>
+                  {['国', '北海道', '東京都', '神奈川県', '愛知県', '大阪府', '京都府', '福岡県', '沖縄県'].map((s) => <option key={s} value={s}>{s === '国' ? '国の課題' : s}</option>)}
+                </select>
+                <input value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} placeholder='カテゴリ（例: 子育て）' className='rounded-lg border border-gray-300 px-3 py-2 text-sm' />
+                <input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} placeholder='課題タイトル' className='rounded-lg border border-gray-300 px-3 py-2 text-sm sm:col-span-2' />
+                <input value={form.proposal} onChange={(e) => setForm((f) => ({ ...f, proposal: e.target.value }))} placeholder='政策提言（タイトル）' className='rounded-lg border border-gray-300 px-3 py-2 text-sm sm:col-span-2' />
+                <input value={form.goal} onChange={(e) => setForm((f) => ({ ...f, goal: e.target.value }))} placeholder='寄付目標額（円）' inputMode='numeric' className='rounded-lg border border-gray-300 px-3 py-2 text-sm' />
+                <input value={form.youtube} onChange={(e) => setForm((f) => ({ ...f, youtube: e.target.value }))} placeholder='関連YouTube ID（任意）' className='rounded-lg border border-gray-300 px-3 py-2 text-sm' />
+              </div>
+              <button className='mt-2 rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-700' onClick={addIssue}>下書きとして登録（非公開）</button>
+              <p className='mt-1 text-[11px] text-gray-400'>登録は下書き（非公開）。内容確認後に「公開」すると国民側「国と地域の課題」に表示されます。</p>
+            </div>
+
+            <div className='flex flex-wrap items-center gap-1.5 text-[11px] text-gray-400'>政策提言の段階：{ISSUE_FUNNEL.map((s, i) => <span key={s}>{s}{i < ISSUE_FUNNEL.length - 1 && <span className='px-0.5 text-gray-300'>→</span>}</span>)}</div>
+
+            {issues.map((it) => (
+              <div key={it.id} className={card}>
+                <div className='flex flex-wrap items-center gap-2'>
+                  <span className='rounded-md bg-gray-100 px-2 py-0.5 text-[11px] font-bold text-gray-500'>{it.category}</span>
+                  <span className='rounded-md bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600'>{it.scope === '国' ? '国の課題' : it.scope}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${it.published ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{it.published ? '公開中' : '非公開（下書き）'}</span>
+                </div>
+                <p className='mt-1 text-sm font-bold text-gray-900'>{it.title}</p>
+                <p className='text-xs text-gray-500'>政策提言：{it.proposal} ・ 目標 {yen(it.goal)}{it.youtube ? ' ・ 🎥動画あり' : ''}</p>
+                {/* ファネル */}
+                <div className='mt-2 flex items-center gap-0.5'>
+                  {ISSUE_FUNNEL.map((s, i) => (
+                    <div key={s} className='flex flex-1 items-center'>
+                      <div className={`flex-1 rounded-full py-1 text-center text-[9px] font-medium ${i <= it.stage ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-400'}`}>{s}</div>
+                      {i < ISSUE_FUNNEL.length - 1 && <span className={`px-0.5 text-[9px] ${i < it.stage ? 'text-blue-600' : 'text-gray-300'}`}>›</span>}
+                    </div>
+                  ))}
+                </div>
+                <div className='mt-2 flex flex-wrap gap-1.5'>
+                  <button className={actPrimary} onClick={() => advanceIssue(it.id)} disabled={it.stage >= ISSUE_FUNNEL.length - 1}>段階を進める</button>
+                  <button className={actBtn} onClick={() => togglePublish(it.id)}>{it.published ? '非公開にする' : '公開する'}</button>
+                </div>
+              </div>
+            ))}
+            <p className='text-[11px] text-gray-400'>※ 課題・政策提言・段階・寄付目標・関連動画を運営側で管理。地域は都道府県単位（市区町村は対象外）。公開分のみ国民側に反映。寄付の実決済は法務確認後。</p>
           </>
         )}
 
