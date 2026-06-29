@@ -43,6 +43,13 @@ interface RosterItem { id: number; name: string; region: string; candidates: num
 // 国・地域の課題／政策提言（国民側 kpi ページに公開）。地域は都道府県単位
 interface IssueItem { id: number; scope: string; category: string; title: string; proposal: string; stage: number; goal: number; youtube: string; published: boolean }
 const ISSUE_FUNNEL = ['政策案作成', '関係者へ周知', '議員への提案', '検討中', 'その他'] as const
+// 公開質問ボード
+type QStatus = '運営確認中' | '公開中' | '上位質問入り' | '候補者へ送付済み' | '回答受付中' | '回答公開中' | '非公開'
+const Q_STATUSES: QStatus[] = ['運営確認中', '公開中', '上位質問入り', '候補者へ送付済み', '回答受付中', '回答公開中', '非公開']
+type AnsStatus = '回答済み' | '未回答' | '回答辞退' | '対象外'
+const ANS_CYCLE: AnsStatus[] = ['未回答', '回答済み', '回答辞退', '対象外']
+interface QBoardItem { id: number; election: string; category: string; title: string; votes: number; status: QStatus; top: boolean; answers: Record<string, AnsStatus> }
+const QBOARD_CANDS = ['区民 一郎', '杉並 花子', '高円寺 健', '阿佐ヶ谷 みどり']
 interface AuditEntry { id: number; time: string; actor: string; action: string; target: string }
 interface Rule { id: string; name: string; desc: string; severity: '高' | '中'; enabled: boolean }
 
@@ -108,6 +115,16 @@ export default function AdminOS() {
   ])
   const [issueSeq, setIssueSeq] = useState(0)
   const [form, setForm] = useState({ scope: '国', category: '', title: '', proposal: '', goal: '1000000', youtube: '' })
+
+  const [qboard, setQboard] = useState<QBoardItem[]>([
+    { id: 1, election: '杉並区長選挙', category: '財政・税金', title: '杉並区の財政をどう評価し、どう改善しますか？', votes: 142, status: '回答公開中', top: true, answers: { '区民 一郎': '回答済み', '杉並 花子': '回答済み', '高円寺 健': '回答済み', '阿佐ヶ谷 みどり': '未回答' } },
+    { id: 2, election: '杉並区長選挙', category: '防災・安全', title: '災害時の死者を減らすため、最初の1年で何を優先しますか？', votes: 98, status: '候補者へ送付済み', top: true, answers: { '区民 一郎': '回答済み', '杉並 花子': '回答済み', '高円寺 健': '未回答', '阿佐ヶ谷 みどり': '回答済み' } },
+    { id: 3, election: '杉並区長選挙', category: '子育て・教育', title: '最初の1年で実行する子育て政策は何ですか？', votes: 76, status: '公開中', top: false, answers: {} },
+    { id: 4, election: '杉並区長選挙', category: '財政・税金', title: '税金の使い方は改善されましたか？', votes: 33, status: '公開中', top: false, answers: {} },
+    { id: 5, election: '杉並区長選挙', category: '行政改革・DX', title: '区役所手続きのどこを最初にデジタル化しますか？', votes: 41, status: '運営確認中', top: false, answers: {} },
+  ])
+  const [mergeSel, setMergeSel] = useState<Set<number>>(new Set())
+  const [copiedTmpl, setCopiedTmpl] = useState(false)
 
   const enabled = useMemo(() => Object.fromEntries(rules.map((r) => [r.id, r.enabled])), [rules])
 
@@ -192,6 +209,26 @@ export default function AdminOS() {
   const togglePublish = (id: number) => { const it = issues.find((x) => x.id === id); if (it) { setIssues((p) => p.map((x) => (x.id === id ? { ...x, published: !x.published } : x))); log(it.published ? '課題を非公開に' : '課題を公開（国民側に表示）', `課題：${it.title}`) } }
   const addIssue = () => { if (!form.title.trim() || !form.proposal.trim()) return; const n = issueSeq + 1; setIssueSeq(n); setIssues((p) => [{ id: 1000 + n, scope: form.scope, category: form.category.trim() || '未分類', title: form.title.trim(), proposal: form.proposal.trim(), stage: 0, goal: Math.max(0, parseInt(form.goal, 10) || 0), youtube: form.youtube.trim(), published: false }, ...p]); log('課題・政策提言を新規登録（下書き・非公開）', `課題：${form.title.trim()}`); setForm({ scope: '国', category: '', title: '', proposal: '', goal: '1000000', youtube: '' }) }
 
+  // ── 公開質問ボード管理 ──
+  const setQStatus = (id: number, status: QStatus) => { const q = qboard.find((x) => x.id === id); setQboard((p) => p.map((x) => (x.id === id ? { ...x, status, top: status === '上位質問入り' ? true : x.top } : x))); if (q) log(`質問ステータスを「${status}」に変更`, `質問：${q.title}`) }
+  const toggleTop = (id: number) => { const q = qboard.find((x) => x.id === id); setQboard((p) => p.map((x) => (x.id === id ? { ...x, top: !x.top, status: !x.top ? '上位質問入り' : x.status } : x))); if (q) log(q.top ? '上位質問から外す' : '上位質問に追加', `質問：${q.title}`) }
+  const toggleMergeSel = (id: number) => setMergeSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const mergeSelected = () => {
+    const ids = [...mergeSel]; if (ids.length < 2) return
+    const keep = qboard.find((x) => x.id === ids[0])!; const others = qboard.filter((x) => ids.slice(1).includes(x.id))
+    const sumVotes = keep.votes + others.reduce((s, x) => s + x.votes, 0)
+    setQboard((p) => p.flatMap((x) => { if (x.id === ids[0]) return [{ ...x, votes: sumVotes }]; if (ids.slice(1).includes(x.id)) return []; return [x] }))
+    log(`類似質問を${ids.length}件統合（投票合算 ${sumVotes}）`, `質問：${keep.title}`); setMergeSel(new Set())
+  }
+  const cycleAnswer = (id: number, cand: string) => { setQboard((p) => p.map((x) => { if (x.id !== id) return x; const curr = x.answers[cand] ?? '未回答'; const next = ANS_CYCLE[(ANS_CYCLE.indexOf(curr) + 1) % ANS_CYCLE.length]; return { ...x, answers: { ...x.answers, [cand]: next } } })) }
+  const copyTemplate = () => {
+    const tops = qboard.filter((x) => x.top); const qlist = tops.map((x, i) => `${i + 1}. ${x.title}`).join('\n')
+    const tmpl = `件名：公開質問へのご回答のお願い｜杉並区長選挙\n\n{候補者名} 様\n\nseijiselect.jp 運営事務局です。\n現在、杉並区長選挙に関して、有権者から候補者の皆様へ確認したい質問を募集しております。\n投票数の多かった質問を運営側で整理し、全候補者の皆様に同一内容でご回答をお願いしております。\n\n以下の質問について、{回答期限} までにご回答いただけますと幸いです。\n\n${qlist || '（上位質問が未選定です）'}\n\nいただいた回答は、全候補者同一条件で公開質問ボード上に掲載します。未回答の場合は「未回答」と表示されます。\n本企画は特定候補者を推奨するものではなく、有権者が候補者の政策・考え方を比較するための中立的な情報提供を目的としています。\nよろしくお願いいたします。`
+    const done = () => { setCopiedTmpl(true); setTimeout(() => setCopiedTmpl(false), 2500); log('候補者送付文テンプレートをコピー', `上位質問 ${tops.length}件`) }
+    navigator.clipboard?.writeText(tmpl).then(done).catch(() => { try { const ta = document.createElement('textarea'); ta.value = tmpl; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); done() } catch { /* ignore */ } })
+  }
+  const ansCls = (s?: AnsStatus) => s === '回答済み' ? 'bg-emerald-50 text-emerald-700' : s === '回答辞退' ? 'bg-rose-50 text-rose-600' : s === '対象外' ? 'bg-gray-100 text-gray-400' : 'bg-amber-50 text-amber-700'
+
   // ── KPI ──
   const total = items.length
   const handled = items.filter((i) => ['承認済み', '却下済み', '法務確認', '返還候補', '差戻し', '保留'].includes(i.status)).length
@@ -217,6 +254,7 @@ export default function AdminOS() {
     { key: 'compliance', label: 'コンプライアンスセンター' },
     { key: 'elections', label: '選挙ページ生成管理' },
     { key: 'issues', label: '国・地域の課題管理' },
+    { key: 'qboard', label: '公開質問ボード管理' },
     { key: 'resources', label: '支援リソース管理' },
     { key: 'reports', label: '透明化レポート管理' },
     { key: 'audit', label: '監査ログ' },
@@ -421,6 +459,77 @@ export default function AdminOS() {
               </div>
             ))}
             <p className='text-[11px] text-gray-400'>※ 課題・政策提言・段階・寄付目標・関連動画を運営側で管理。地域は都道府県単位（市区町村は対象外）。公開分のみ国民側に反映。寄付の実決済は法務確認後。</p>
+          </>
+        )}
+
+        {/* 公開質問ボード管理 */}
+        {tab === 'qboard' && (
+          <>
+            <div className={`${card} flex flex-wrap items-center justify-between gap-3`}>
+              <div><h3 className='text-sm font-bold text-gray-900'>公開質問ボード管理</h3><p className='text-xs text-gray-400'>質問の公開/非公開・上位選定・類似統合・候補者回答・送付文を管理。即時公開せず運営確認を経る。</p></div>
+              <div className='flex gap-2'>
+                <button className='rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50' onClick={() => log('質問・回答CSVを書き出し', '公開質問ボード')}>CSV出力</button>
+                <button className='rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700' onClick={copyTemplate}>{copiedTmpl ? '✓ コピー' : '候補者送付文テンプレをコピー'}</button>
+              </div>
+            </div>
+
+            {/* 統合バー */}
+            {mergeSel.size >= 2 && (
+              <div className='flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-800'>
+                <span>{mergeSel.size}件を選択中（先頭に統合・投票合算）</span>
+                <button className='rounded-lg bg-blue-600 px-3 py-1.5 font-semibold text-white hover:bg-blue-700' onClick={mergeSelected}>選択した質問を統合</button>
+              </div>
+            )}
+
+            {/* 質問管理（投票数順） */}
+            <h3 className='text-xs font-bold uppercase tracking-wide text-gray-400'>質問管理（投票数順）</h3>
+            {[...qboard].sort((a, b) => b.votes - a.votes).map((q) => (
+              <div key={q.id} className={card}>
+                <div className='flex items-start gap-3'>
+                  <input type='checkbox' className='mt-1' checked={mergeSel.has(q.id)} onChange={() => toggleMergeSel(q.id)} title='類似統合の選択' />
+                  <div className='flex shrink-0 flex-col items-center'><span className='text-[9px] text-gray-400'>▲票</span><span className='text-sm font-bold text-gray-700'>{q.votes}</span></div>
+                  <div className='min-w-0 flex-1'>
+                    <div className='flex flex-wrap items-center gap-1.5'>
+                      <span className='rounded-md bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500'>{q.category}</span>
+                      <span className='text-[10px] text-gray-400'>{q.election}</span>
+                      {q.top && <span className='rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700'>上位質問</span>}
+                    </div>
+                    <p className='mt-1 text-sm font-semibold text-gray-900'>{q.title}</p>
+                    <div className='mt-2 flex flex-wrap items-center gap-1.5'>
+                      <select value={q.status} onChange={(e) => setQStatus(q.id, e.target.value as QStatus)} className='rounded-lg border border-gray-300 px-2 py-1 text-[11px]'>
+                        {Q_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                      <button className={actBtn} onClick={() => setQStatus(q.id, q.status === '非公開' ? '公開中' : '非公開')}>{q.status === '非公開' ? '公開する' : '非公開にする'}</button>
+                      <button className={actBtn} onClick={() => toggleTop(q.id)}>{q.top ? '上位から外す' : '上位質問に追加'}</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <p className='text-[11px] text-gray-400'>※ 類似質問は左のチェックで複数選択→統合（投票合算）。上位質問は運営が中立的に整えてから確定（完全自動では確定しない）。</p>
+
+            {/* 候補者回答管理（上位質問 × 候補者） */}
+            <h3 className='mt-2 text-xs font-bold uppercase tracking-wide text-gray-400'>候補者回答管理（上位質問 × 候補者）</h3>
+            <div className='overflow-x-auto rounded-xl border border-gray-200 bg-white'>
+              <table className='w-full text-sm'>
+                <thead><tr className='border-b border-gray-100'>
+                  <th className='p-3 text-left text-xs font-medium text-gray-400'>質問</th>
+                  {QBOARD_CANDS.map((c) => <th key={c} className='whitespace-nowrap p-3 text-center text-[11px] font-medium text-gray-500'>{c}</th>)}
+                </tr></thead>
+                <tbody>
+                  {qboard.filter((q) => q.top).map((q) => (
+                    <tr key={q.id} className='border-b border-gray-50 last:border-0'>
+                      <td className='p-3 text-xs font-semibold text-gray-700'>{q.title}</td>
+                      {QBOARD_CANDS.map((c) => { const s = q.answers[c] ?? '未回答'; return (
+                        <td key={c} className='p-2 text-center'><button onClick={() => cycleAnswer(q.id, c)} className={`rounded px-2 py-1 text-[10px] font-semibold ${ansCls(s)}`} title='クリックで切替'>{s}</button></td>
+                      ) })}
+                    </tr>
+                  ))}
+                  {qboard.filter((q) => q.top).length === 0 && <tr><td colSpan={QBOARD_CANDS.length + 1} className='p-3 text-center text-xs text-gray-400'>上位質問を選定すると、候補者ごとの回答状況を管理できます。</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <p className='text-[11px] text-gray-400'>※ セルをクリックで 未回答→回答済み→回答辞退→対象外 を切替。全候補者へ同一質問・同条件で送付。公開側に回答済み/未回答を反映。</p>
           </>
         )}
 
